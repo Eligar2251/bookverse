@@ -1,9 +1,18 @@
 import type { Metadata } from 'next'
-import { Inter } from 'next/font/google'
+import { Inter, Merriweather } from 'next/font/google'
 import './globals.css'
 import { Providers } from '@/components/providers'
 
-const inter = Inter({ subsets: ['latin', 'cyrillic'] })
+const inter = Inter({
+  subsets: ['latin', 'cyrillic'],
+  variable: '--font-sans',
+})
+
+const merriweather = Merriweather({
+  subsets: ['latin', 'cyrillic'],
+  weight: ['300', '400', '700'],
+  variable: '--font-serif',
+})
 
 export const metadata: Metadata = {
   title: {
@@ -26,7 +35,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ru" suppressHydrationWarning>
-      <body className={inter.className}>
+      <body className={`${inter.variable} ${merriweather.variable} font-sans`}>
         <Providers>{children}</Providers>
       </body>
     </html>
