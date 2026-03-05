@@ -25,79 +25,93 @@ export function ImageUpload({
   className,
 }: ImageUploadProps) {
   const [uploading, setUploading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   const handleUpload = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0]
       if (!file) return
-
-      // Reset input so same file can be selected again
       e.target.value = ''
 
-      // Validate size
+      console.log('[ImageUpload] File selected:', file.name, file.type, file.size)
+
       const maxSize = bucket === 'avatars' ? 2 : 5
       if (file.size > maxSize * 1024 * 1024) {
-        toast.error(`Файл слишком большой (макс. ${maxSize}MB)`)
-        return
-      }
-
-      // Validate type
-      const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
-      if (!allowedTypes.includes(file.type)) {
-        toast.error('Допустимые форматы: JPG, PNG, WebP, GIF')
+        toast.error(`Макс. ${maxSize}MB`)
         return
       }
 
       setUploading(true)
-      setError(null)
+      setErrorMsg(null)
+
+      const supabase = createClient()
 
       try {
-        const supabase = createClient()
+        // 1. Проверяем авторизацию
+        console.log('[ImageUpload] Checking auth...')
+        const { data: authData, error: authError } = await supabase.auth.getUser()
+        console.log('[ImageUpload] Auth result:', { user: authData?.user?.id, error: authError })
 
-        // Check auth
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) {
-          toast.error('Необходимо войти в аккаунт')
+        if (authError || !authData.user) {
+          const msg = authError?.message || 'Не авторизован'
+          console.error('[ImageUpload] Auth failed:', msg)
+          setErrorMsg(msg)
+          toast.error('Войдите в аккаунт')
           setUploading(false)
           return
         }
 
+        const userId = authData.user.id
+
+        // 2. Проверяем что бакет существует
+        console.log('[ImageUpload] Listing buckets...')
+        const { data: buckets, error: bucketsError } = await supabase.storage.listBuckets()
+        console.log('[ImageUpload] Buckets:', buckets?.map(b => b.id), 'Error:', bucketsError)
+
+        // 3. Формируем путь
         const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg'
-        const fileName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`
-        const filePath = `${user.id}/${fileName}`
+        const fileName = `${Date.now()}.${ext}`
+        const filePath = `${userId}/${fileName}`
+        console.log('[ImageUpload] Upload path:', bucket, filePath)
 
-        console.log('Uploading to:', bucket, filePath)
+        // 4. Загружаем
+        console.log('[ImageUpload] Starting upload...')
+        const startTime = Date.now()
 
-        const { data, error: uploadError } = await supabase.storage
+        const { data: uploadData, error: uploadError } = await supabase.storage
           .from(bucket)
           .upload(filePath, file, {
             cacheControl: '3600',
-            upsert: false,
+            upsert: true,
           })
 
+        const elapsed = Date.now() - startTime
+        console.log('[ImageUpload] Upload completed in', elapsed, 'ms')
+        console.log('[ImageUpload] Upload data:', uploadData)
+        console.log('[ImageUpload] Upload error:', uploadError)
+
         if (uploadError) {
-          console.error('Upload error:', uploadError)
-          setError(uploadError.message)
-          toast.error(`Ошибка загрузки: ${uploadError.message}`)
+          const msg = uploadError.message || 'Ошибка загрузки'
+          console.error('[ImageUpload] Upload failed:', msg)
+          setErrorMsg(msg)
+          toast.error(msg)
           setUploading(false)
           return
         }
 
-        console.log('Upload success:', data)
-
+        // 5. Получаем публичный URL
         const { data: urlData } = supabase.storage
           .from(bucket)
-          .getPublicUrl(data.path)
+          .getPublicUrl(uploadData.path)
 
-        console.log('Public URL:', urlData.publicUrl)
+        console.log('[ImageUpload] Public URL:', urlData.publicUrl)
 
         onChange(urlData.publicUrl)
-        toast.success('Изображение загружено')
+        toast.success('Загружено!')
       } catch (err: any) {
-        console.error('Unexpected error:', err)
-        setError(err.message || 'Неизвестная ошибка')
-        toast.error(err.message || 'Ошибка загрузки')
+        console.error('[ImageUpload] Unexpected error:', err)
+        setErrorMsg(err?.message || 'Ошибка')
+        toast.error(err?.message || 'Ошибка загрузки')
       } finally {
         setUploading(false)
       }
@@ -109,78 +123,43 @@ export function ImageUpload({
     <div className={cn('relative group', className)} style={{ aspectRatio }}>
       {value ? (
         <>
-          <img
-            src={value}
-            alt=""
-            className="w-full h-full object-cover rounded-lg border"
-          />
+          <img src={value} alt="" className="w-full h-full object-cover rounded-lg border" />
           <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg flex items-center justify-center gap-2">
             <label className="cursor-pointer">
               <Button size="sm" variant="secondary" asChild>
-                <span>
-                  <ImagePlus className="h-4 w-4 mr-1" />
-                  Заменить
-                </span>
+                <span><ImagePlus className="h-4 w-4 mr-1" />Заменить</span>
               </Button>
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp,image/gif"
-                className="hidden"
-                onChange={handleUpload}
-                disabled={uploading}
-              />
+              <input type="file" accept="image/*" className="hidden" onChange={handleUpload} disabled={uploading} />
             </label>
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={() => onChange(null)}
-            >
+            <Button size="sm" variant="destructive" onClick={() => onChange(null)}>
               <X className="h-4 w-4" />
             </Button>
           </div>
         </>
       ) : (
-        <label
-          className={cn(
-            'w-full h-full border-2 border-dashed rounded-lg flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors',
-            uploading
-              ? 'border-primary/50 bg-primary/5'
-              : error
-                ? 'border-destructive/50 bg-destructive/5'
-                : 'hover:border-primary/50 hover:bg-accent text-muted-foreground'
-          )}
-        >
+        <label className={cn(
+          'w-full h-full border-2 border-dashed rounded-lg flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors',
+          uploading ? 'border-primary/50 bg-primary/5' : errorMsg ? 'border-destructive/50' : 'hover:border-primary/50 hover:bg-accent text-muted-foreground'
+        )}>
           {uploading ? (
             <>
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
               <span className="text-sm text-primary">Загрузка...</span>
             </>
-          ) : error ? (
+          ) : errorMsg ? (
             <>
               <AlertCircle className="h-8 w-8 text-destructive" />
-              <span className="text-xs text-destructive text-center px-2">
-                {error}
-              </span>
-              <span className="text-xs text-muted-foreground">
-                Нажмите, чтобы попробовать снова
-              </span>
+              <span className="text-xs text-destructive text-center px-2">{errorMsg}</span>
+              <span className="text-xs text-muted-foreground">Нажмите снова</span>
             </>
           ) : (
             <>
               <ImagePlus className="h-8 w-8" />
               <span className="text-sm">Загрузить</span>
-              <span className="text-[10px] text-muted-foreground">
-                JPG, PNG, WebP · макс. {bucket === 'avatars' ? '2' : '5'}MB
-              </span>
+              <span className="text-[10px] text-muted-foreground">JPG, PNG, WebP</span>
             </>
           )}
-          <input
-            type="file"
-            accept="image/jpeg,image/png,image/webp,image/gif"
-            className="hidden"
-            onChange={handleUpload}
-            disabled={uploading}
-          />
+          <input type="file" accept="image/*" className="hidden" onChange={handleUpload} disabled={uploading} />
         </label>
       )}
     </div>
